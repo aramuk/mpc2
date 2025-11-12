@@ -1,0 +1,17 @@
+[project]
+name = "mpc2"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Aditesh Kumar", email = "27091329+aramuk@users.noreply.github.com" }
+]
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+mpc2 = "mpc2:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

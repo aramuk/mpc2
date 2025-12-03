@@ -7,7 +7,12 @@ authors = [
     { name = "Aditesh Kumar", email = "27091329+aramuk@users.noreply.github.com" }
 ]
 requires-python = ">=3.10,<3.11"
-dependencies = []
+dependencies = [
+    "click>=8.3.1",
+    "gymnasium[box2d]>=1.2.2",
+    "seaborn>=0.13.2",
+    "swig>=4.4.0",
+]
 
 [project.scripts]
 mpc2 = "mpc2:main"

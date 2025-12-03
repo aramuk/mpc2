@@ -17,7 +17,7 @@ class MPCGridNavigator:
         vx, vy = control
         return np.array([x + vx * self.dt, y + vy * self.dt])
     
-    def cost_function(self, u_flat, x0, goal):
+    def cost_function(self, u_flat, x0, goal, obstacles):
         """Total cost over horizon"""
         u = u_flat.reshape((self.horizon, 2))
         cost = 0.0
@@ -27,16 +27,23 @@ class MPCGridNavigator:
             # Predict next state
             x = self.dynamics(x, u[t])
             
+            # Obstacle cost (penalize collisions)
+            if obstacles is not None:
+                for obstacle in obstacles:
+                    if np.linalg.norm(x - obstacle) < 1.0:
+                        cost += 1e10
+                        return cost
+
             # State cost (distance to goal)
             state_error = x - goal
             cost += state_error.T @ self.Q @ state_error
             
-            # Control cost (penalize large velocities)
+            # Control cost (penalize large velocities) 
             cost += u[t].T @ self.R @ u[t]
             
         return cost
     
-    def solve(self, current_pos, goal_pos):
+    def solve(self, current_pos, goal_pos, obstacles):
         """Solve MPC optimization problem"""
         # Initial guess (zero controls)
         u0 = np.zeros(self.horizon * 2)
@@ -48,7 +55,7 @@ class MPCGridNavigator:
         result = minimize(
             self.cost_function,
             u0,
-            args=(current_pos, goal_pos),
+            args=(current_pos, goal_pos, obstacles),
             method='SLSQP',
             bounds=bounds
         )
@@ -63,14 +70,19 @@ def main():
     
     # Initial position and goal
     pos = np.array([1.0, 1.0])
-    goal = np.array([9.0, 8.0])
-    
+    goal = np.array([-20.0, 35.0])
+    # Diagonal obstacles
+    obstacles = np.ones((1, 2)) * np.linspace(0, 50, 50).reshape(-1, 1) + 2.0
+    print(obstacles.shape)
+    # Get stuck because box around initial position
+    # obstacles = np.array([[0.,0],[0,1.],[0, 2.],[1, 0.],[1, 2.],[2, 0.],[2, 1.],[2, 2.]])
+
     trajectory = [pos.copy()]
     
     # Simulate navigation
     for step in range(20):
         # Compute optimal control
-        control = mpc.solve(pos, goal)
+        control = mpc.solve(pos, goal, obstacles)
         
         # Apply control and update position
         pos = mpc.dynamics(pos, control)

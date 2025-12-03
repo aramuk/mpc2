@@ -56,3 +56,11 @@ def get_tensor_library() -> Any:
         return np
     else:
         raise ValueError(f"Unsupported tensor type: {os.environ['MPC2_TENSOR_TYPE']}")
+
+def tensor_cat(tensors: List[TensorType]) -> TensorType:
+    if os.environ["MPC2_TENSOR_TYPE"] == "torch":
+        return torch.cat(tensors, dim=0)
+    elif os.environ["MPC2_TENSOR_TYPE"] == "numpy":
+        return np.concatenate(tensors, axis=0)
+    else:
+        raise ValueError(f"Unsupported tensor type: {os.environ['MPC2_TENSOR_TYPE']}")

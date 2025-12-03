@@ -1,12 +1,11 @@
 from typing import List, Tuple
 
 import click
-import numpy as np
 from scipy.optimize import minimize
 
 from mpc2.planner import ModelPredictivePlanner
 import mpc2.utils as U
-from mpc2.world_model import SimpleDiscreteTimeDynamics
+from mpc2.world_model import SimpleDiscreteTimeDynamics, WorldModel
 
 
 class SLSQPPlanner(ModelPredictivePlanner):
@@ -17,10 +16,11 @@ class SLSQPPlanner(ModelPredictivePlanner):
         state_cost: List[float],
         action_cost: List[float],
         control_bounds: Tuple[float, float],
+        world_model: WorldModel,
         dt: float,
         **kwargs,
     ):
-        super().__init__(world_model=SimpleDiscreteTimeDynamics(dt=dt), dt=dt, **kwargs)
+        super().__init__(world_model=world_model, dt=dt, **kwargs)
         self.Q = U.get_tensor_library().diag(state_cost)
         self.R = U.get_tensor_library().diag(action_cost)
         self.control_bounds = control_bounds
@@ -63,9 +63,9 @@ class SLSQPPlanner(ModelPredictivePlanner):
             method="SLSQP",
             bounds=bounds,
         )
-        # Return first control action
-        action_opt = result.x.reshape((self.horizon, 2))
-        return action_opt[0]
+        # Return full trajectory
+        trajectory = result.x.reshape((self.horizon, 2))
+        return trajectory
 
 
 @click.command()
@@ -75,7 +75,10 @@ class SLSQPPlanner(ModelPredictivePlanner):
 def run(max_iterations: int, horizon: int, dt: float):
     import numpy as np
     U.set_tensor_type(np.zeros((1,)))
+
+    world_model = SimpleDiscreteTimeDynamics(dt=dt)
     planner = SLSQPPlanner(
+        world_model=world_model,
         state_cost=[10.0, 10.0],
         action_cost=[1.0, 1.0],
         control_bounds=(-2.0, 2.0),
@@ -91,9 +94,9 @@ def run(max_iterations: int, horizon: int, dt: float):
     trajectory = [state["position"].copy()]
 
     # Simulate navigation
-    for step in range(20):
+    for step in range(max_iterations):
         # Compute optimal control
-        control = planner.plan(state, goal)
+        control = planner.plan(state, goal)[0]
 
         # Apply control and update position
         state = planner.model(state, control)

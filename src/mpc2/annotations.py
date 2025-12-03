@@ -7,4 +7,4 @@ TensorType = Union[torch.Tensor, crypten.mpc.MPCTensor]
 State = Dict
 Action = TensorType
 Reward = float
-Trajectory = List[Tuple[State, Action, Reward]]
+Trajectory = List[Action]

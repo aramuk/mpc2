@@ -1,21 +1,12 @@
 import queue
 import time
-from typing import Tuple
+from typing import List, Tuple
 
 import click
 import crypten
 import numpy as np
+from scipy.optimize import minimize
 import torch
-
-from .planner import ModelPredictivePlanner
-
-
-class NavigationPlanner(ModelPredictivePlanner):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-    def plan(self, initial_state, goal):
-        pass
 
 class Server:
     def __init__(self, initial_pos: Tuple[float, float]):

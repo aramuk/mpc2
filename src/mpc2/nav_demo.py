@@ -36,6 +36,7 @@ class MPCGridNavigator:
 
             # State cost (distance to goal)
             state_error = x - goal
+            print(state_error.T.shape, self.Q.shape, state_error.shape)
             cost += state_error.T @ self.Q @ state_error
             
             # Control cost (penalize large velocities) 
@@ -73,7 +74,7 @@ def main():
     goal = np.array([-20.0, 35.0])
     # Diagonal obstacles
     obstacles = np.ones((1, 2)) * np.linspace(0, 50, 50).reshape(-1, 1) + 2.0
-    print(obstacles.shape)
+
     # Get stuck because box around initial position
     # obstacles = np.array([[0.,0],[0,1.],[0, 2.],[1, 0.],[1, 2.],[2, 0.],[2, 1.],[2, 2.]])
 

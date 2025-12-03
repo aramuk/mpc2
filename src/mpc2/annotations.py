@@ -3,8 +3,8 @@ from typing import Dict, List, Tuple, Union
 import crypten
 import torch
 
-Tensor = Union[torch.Tensor, crypten.mpc.MPCTensor]
+TensorType = Union[torch.Tensor, crypten.mpc.MPCTensor]
 State = Dict
-Action = Tensor
+Action = TensorType
 Reward = float
 Trajectory = List[Tuple[State, Action, Reward]]

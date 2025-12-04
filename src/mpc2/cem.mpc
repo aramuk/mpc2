@@ -1,260 +1,156 @@
-import abc
-import argparse
-import queue
-from typing import Dict, List, Tuple
+from Compiler import mpc_math
 
-import numpy as np
+# Configuration
+HORIZON = 5
+N_ITERATIONS = 10
+N_ROLLOUTS = 16
+N_ELITES = 4
+DT = sfix(1.0)
+MAX_STEPS = 50
 
-## BEGIN: annotations.py
-TensorType = np.ndarray
-State = Dict
-Action = TensorType
-Reward = float
-Trajectory = List[Action]
-## END
+# Cost matrices
+Q = sfix.Matrix(2, 2)
+Q[0][0] = sfix(10.0)
+Q[1][1] = sfix(10.0)
+R = sfix.Matrix(2, 2)
+R[0][0] = sfix(1.0)
+R[1][1] = sfix(1.0)
 
-## BEGIN: world_model.py
-class WorldModel(abc.ABC):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+CONTROL_MIN = sfix(-2.0)
+CONTROL_MAX = sfix(2.0)
 
-    def __call__(self, state: State, action: TensorType) -> State:
-        raise NotImplementedError
+def dynamics(pos_x, pos_y, action_x, action_y):
+    """Simple dynamics: position += action * dt"""
+    new_x = pos_x + action_x * DT
+    new_y = pos_y + action_y * DT
+    return new_x, new_y
 
-
-class SimpleDiscreteTimeDynamics(WorldModel):
-    def __init__(self, dt: float):
-        super().__init__()
-        self.dt = dt
-
-    def __call__(self, state: State, action: TensorType) -> State:
-
-        pos = state.get("position")
-        obstacles = state.get("obstacles")
-        if obstacles is not None:
-            for obstacle in obstacles:
-                if np.linalg.norm(pos - obstacle) < 1.0:
-                    return {"position": pos, "obstacles": state.get("obstacles")}
+def cost_function(actions, pos_x, pos_y, goal_x, goal_y):
+    """Compute trajectory cost over horizon"""
+    total_cost = sfix(0)
+    curr_x, curr_y = pos_x, pos_y
+    
+    @for_range(HORIZON)
+    def _(t):
+        action_x = actions[t * 2]
+        action_y = actions[t * 2 + 1]
         
-        return {"position": pos + action * self.dt, "obstacles": state.get("obstacles")}
-## END
+        next_x, next_y = dynamics(curr_x, curr_y, action_x, action_y)
+        curr_x.update(next_x)
+        curr_y.update(next_y)
+        
+        error_x = curr_x - goal_x
+        error_y = curr_y - goal_y
+        state_cost = Q[0][0] * error_x * error_x + Q[1][1] * error_y * error_y
+        
+        control_cost = R[0][0] * action_x * action_x + R[1][1] * action_y * action_y
+        
+        total_cost.update(total_cost + state_cost + control_cost)
+    
+    return total_cost
 
-## BEGIN: planner.py
-class ModelPredictivePlanner(abc.ABC):
-    def __init__(self, world_model: WorldModel, horizon: int, dt: float):
-        super().__init__()
-        self.horizon = horizon
-        self.dt = dt
-        self.model = world_model
+def sample_actions(mu, sigma):
+    """Sample actions from normal distribution and clip to bounds"""
+    actions = sfix.Array(HORIZON * 2)
+    
+    @for_range(HORIZON * 2)
+    def _(i):
+        sample = sfix.get_random(-1, 1) * sigma[i] + mu[i]
+        clipped = sample.min(CONTROL_MAX).max(CONTROL_MIN)
+        actions[i] = clipped
+    
+    return actions
 
-    @abc.abstractmethod
-    def plan(self, initial_state: State, goal: TensorType) -> Trajectory:
-        raise NotImplementedError
+def plan(pos_x, pos_y, goal_x, goal_y):
+    """Cross-Entropy Method planning - returns full trajectory"""
+    mu = sfix.Array(HORIZON * 2)
+    sigma = sfix.Array(HORIZON * 2)
+    
+    @for_range(HORIZON * 2)
+    def _(i):
+        mu[i] = sfix(0)
+        sigma[i] = sfix(1)
+    
+    @for_range(N_ITERATIONS)
+    def _(iter_idx):
+        trajectories = sfix.Matrix(N_ROLLOUTS, HORIZON * 2)
+        costs = sfix.Array(N_ROLLOUTS)
+        
+        @for_range(N_ROLLOUTS)
+        def _(rollout_idx):
+            traj = sample_actions(mu, sigma)
+            print_ln("Rollout %s/%s, trajectory: %s", rollout_idx, N_ROLLOUTS, traj.reveal())
+            cost = cost_function(traj, pos_x, pos_y, goal_x, goal_y)
+            costs[rollout_idx] = cost
+            print_ln("Iteration %s/%s, rollout %s/%s, cost: %s", iter_idx, N_ITERATIONS, rollout_idx, N_ROLLOUTS, cost.reveal())
+            
+            @for_range(HORIZON * 2)
+            def _(j):
+                trajectories[rollout_idx][j] = traj[j]
+        
+        @for_range(HORIZON * 2)
+        def _(i):
+            sum_val = sfix(0)
+            sum_sq = sfix(0)
+            
+            @for_range(N_ELITES)
+            def _(elite_idx):
+                val = trajectories[elite_idx][i]
+                sum_val.update(sum_val + val)
+                sum_sq.update(sum_sq + val * val)
+            
+            new_mu = sum_val / sfix(N_ELITES)
+            variance = sum_sq / sfix(N_ELITES) - new_mu * new_mu
+            new_sigma = mpc_math.sqrt(variance.max(sfix(0.01)))
+            
+            mu[i] = new_mu
+            sigma[i] = new_sigma
+    
+    return sample_actions(mu, sigma)
 
-    @abc.abstractmethod
-    def cost_function(self, actions: TensorType, initial_state: TensorType, goal: TensorType) -> TensorType:
-        raise NotImplementedError
-# END
+# Main execution
+print_ln("Starting MPC robot navigation")
 
-class CrossEntropyMethodPlanner(ModelPredictivePlanner):
-    """Simple sampling-based MPC planner using Cross-Entropy Method."""
+# Party 0 (robot) provides goal and position via get_input_from(0)
+# All parties call this - party 0 provides input, party 1 receives it
+goal_x = sfix.get_input_from(0)
+goal_y = sfix.get_input_from(0)
+pos_x = sfix.get_input_from(0)
+pos_y = sfix.get_input_from(0)
+print_ln("Goal: (%s, %s)", goal_x.reveal(), goal_y.reveal())
+print_ln("Initial position: (%s, %s)", pos_x.reveal(), pos_y.reveal())
 
-    def __init__(
-        self,
-        state_cost: List[float],
-        action_cost: List[float],
-        control_bounds: Tuple[float, float],
-        n_iterations: int,
-        n_rollouts: int,
-        n_elites: int,
-        world_model: WorldModel,
-        dt: float,
-        **kwargs,
-    ):
-        super().__init__(world_model=world_model, dt=dt, **kwargs)
-        self.Q = np.diag(state_cost)
-        self.R = np.diag(action_cost)
-        self.mu = np.zeros(2)
-        self.sigma = np.ones(2)
-        self.control_bounds = control_bounds
-        self.n_rollouts = n_rollouts
-        self.n_elites = n_elites
-        self.n_iterations = n_iterations
+print_ln("Starting MPC control loop")
+# Main control loop
+@for_range(MAX_STEPS)
+def _(step):
+    # Server (party 1) performs planning on secret data
+    print_ln("Planning step %s", step)
+    trajectory = plan(pos_x, pos_y, goal_x, goal_y)
+    
+    # Reveal full trajectory to party 0 (robot) only
+    revealed_actions = sfix.Array(HORIZON * 2)
+    @for_range(HORIZON * 2)
+    def _(i):
+        revealed_actions[i] = trajectory[i].reveal_to(0)
+    
+    # Party 0 executes first action locally (in cleartext)
+    # We still update the shared position for next planning iteration
+    action_x = trajectory[0]
+    action_y = trajectory[1]
+    
+    new_x, new_y = dynamics(pos_x, pos_y, action_x, action_y)
+    pos_x.update(new_x)
+    pos_y.update(new_y)
+    
+    # Print progress (reveal to both parties)
+    @if_((step % 5).reveal() == 0)
+    def _():
+        print_ln("Step %s: pos=(%s, %s)", 
+                 step, pos_x.reveal(), pos_y.reveal())
 
-    def cost_function(self, actions, initial_state, goal):
-        """Total cost over horizon"""
-        u = actions.reshape((self.horizon, 2))
-        cost = 0.0
-        x = initial_state.copy()
-        obstacles = initial_state.get("obstacles")
-
-        for t in range(self.horizon):
-            # Predict next state
-            x = self.model(x, u[t])
-
-            # Obstacle cost (penalize collisions)
-            if obstacles is not None:
-                for obstacle in obstacles:
-                    if np.linalg.norm(x["position"] - obstacle) < 1.0:
-                        cost += 1e10
-                        return cost
-
-            # State cost (distance to goal)
-            state_error = x["position"] - goal
-            cost += state_error.T @ self.Q @ state_error
-
-            # Control cost (penalize large velocities)
-            cost += u[t].T @ self.R @ u[t]
-
-        return cost
-
-    def plan(self, initial_state, goal):
-        actions = np.zeros(self.horizon * 2)
-
-        def rollout():
-            actions = np.random.normal(loc=self.mu, scale=self.sigma, size=(self.horizon, 2))
-            actions = np.clip(actions, self.control_bounds[0], self.control_bounds[1])
-            return actions
-
-        trajectories = []
-        for _ in range(self.n_iterations):
-            trajectories = []
-            for _ in range(self.n_rollouts):
-                traj = rollout()
-                cost = self.cost_function(actions, initial_state, goal)
-                trajectories.append((traj, cost))
-            trajectories.sort(key=lambda x: x[1], reverse=True)
-            self.mu = np.mean([traj for traj, _ in trajectories[:self.n_elites]], axis=0)
-            self.sigma = np.std([traj for traj, _ in trajectories[:self.n_elites]], axis=0)
-
-        return rollout()
-
-## BEGIN: robot.py
-class Robot:
-    def __init__(self, initial_state: State, dynamics: WorldModel):
-        self._initial_state = initial_state
-        self.dynamics = dynamics
-        self.reset()
-
-    def reset(self):
-        self.state = self._initial_state.copy()
-        self.t = 0.0
-
-    @property
-    def pos(self):
-        return self.state["position"]
-
-    def step(self, action: TensorType):
-        self.state = self.dynamics(self.state, action)
-        self.t += 1.0
-
-    def get_observations(self):
-        if int(self.t) % 10 == 0:
-            return self.state["position"] + np.ones((1, 2))
-        else:
-            return None
-## END
-
-## BEGIN: server.py
-class Server:
-    def __init__(
-        self,
-        initial_state: State,
-        planner: ModelPredictivePlanner,
-    ):
-        self._initial_state = initial_state
-        self._obs_buffer = queue.Queue(maxsize=10)
-        self.reset()
-        self.planner = planner
-        self.t = 0.0
-
-    def reset(self):
-        self.t = 0.0
-        self.state = self._initial_state.copy()
-        self._obs_buffer.queue.clear()
-        self._obs_buffer.put(self.state["obstacles"].shape[0])
-
-    @property
-    def pos(self) -> State:
-        return self.state["position"]
-
-    def update(self, pos: TensorType, obs: TensorType, ts: float = 1.0):
-        if self._obs_buffer.full():
-            n_expired = self._obs_buffer.get()
-            self.state["obstacles"] = self.state["obstacles"][n_expired:]
-        self._obs_buffer.put(obs.shape[0])
-        self.state["obstacles"] = np.concatenate([self.state["obstacles"], obs], axis=0)
-        self.state["position"] = pos
-        self.t = ts
-
-    def plan(self, goal: TensorType):
-        return self.planner.plan(self.state, goal)
-## END
-
-
-def run(goal: Tuple[float, float], robot_initial_pos: Tuple[float, float], n_cem_steps: int, n_rollouts_per_step: int, n_elites: int, max_iterations: int, horizon: int, dt: float):
-
-    dynamics = SimpleDiscreteTimeDynamics(dt=dt)
-    initial_state = {
-        "position": np.array(robot_initial_pos),
-        "obstacles": np.array([[1.0, 1.0]]),
-    }
-
-    robot = Robot(initial_state, dynamics)
-
-    world_model = SimpleDiscreteTimeDynamics(dt=dt)
-    planner = CrossEntropyMethodPlanner(
-        world_model=world_model,
-        state_cost=[10.0, 10.0],
-        action_cost=[1.0, 1.0],
-        control_bounds=(-2.0, 2.0),
-        n_iterations=n_cem_steps,
-        n_rollouts=n_rollouts_per_step,
-        n_elites=n_elites,
-        horizon=horizon,
-        dt=dt,
-    )
-
-    server = Server({"obstacles": np.array([[np.inf, np.inf]])}, planner)
-
-    goal = np.array(goal)
-
-    actions = queue.Queue()
-
-    while robot.t <= max_iterations and np.linalg.norm(robot.pos - goal) > 0.5:
-        should_update = (obs := robot.get_observations()) is not None
-        if should_update:
-            print(f"Updating server at t={robot.t:.2f}")
-            server.update(robot.pos, obs, robot.t)
-
-        if actions.empty() or should_update:
-            for control in server.plan(goal):
-                actions.put(control)
-        control = actions.get()
-        print(
-            f"[t={robot.t:.2f}]: pos=({robot.pos[0]:.2f}, {robot.pos[1]:.2f}), control=({control[0]:.2f}, {control[1]:.2f})"
-        )
-        robot.step(control)
-
-    if np.linalg.norm(robot.pos - goal) <= 0.5:
-        print(
-            f"Goal reached in t={robot.t:.2f}. robot_pos=({robot.pos[0]:.2f}, {robot.pos[1]:.2f})"
-        )
-    else:
-        print(
-            f"Failed to reach goal in t={robot.t:.2f}. robot_pos=({robot.pos[0]:.2f}, {robot.pos[1]:.2f})"
-        )
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--n-cem-steps", type=int, default=100)
-    parser.add_argument("--n-rollouts-per-step", type=int, default=32)
-    parser.add_argument("--n-elites", type=int, default=8)
-    parser.add_argument("--max-iterations", type=int, default=100)
-    parser.add_argument("--horizon", type=int, default=5)
-    parser.add_argument("--dt", type=float, default=1.0)
-    parser.add_argument("--goal", type=tuple, default=(20.0, 35.0))
-    parser.add_argument("--robot-initial-pos", type=tuple, default=(0.0, 0.0))
-    args = parser.parse_args()
-
-    run(**vars(args))
+# Final result
+print_ln("Final position: (%s, %s)", pos_x.reveal(), pos_y.reveal())
+final_dist_sq = (pos_x - goal_x) * (pos_x - goal_x) + (pos_y - goal_y) * (pos_y - goal_y)
+final_dist = mpc_math.sqrt(final_dist_sq)
+print_ln("Distance to goal: %s", final_dist.reveal())

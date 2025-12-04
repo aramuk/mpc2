@@ -1,0 +1,191 @@
+import abc
+import argparse
+from typing import Dict, List, Tuple
+
+import numpy as np
+
+## BEGIN: annotations.py
+TensorType = np.ndarray
+State = Dict
+Action = TensorType
+Reward = float
+Trajectory = List[Action]
+## END
+
+## BEGIN: world_model.py
+class WorldModel(abc.ABC):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def __call__(self, state: State, action: TensorType) -> State:
+        raise NotImplementedError
+
+
+class SimpleDiscreteTimeDynamics(WorldModel):
+    def __init__(self, dt: float):
+        super().__init__()
+        self.dt = dt
+
+    def __call__(self, state: State, action: TensorType) -> State:
+
+        pos = state.get("position")
+        obstacles = state.get("obstacles")
+        if obstacles is not None:
+            for obstacle in obstacles:
+                if np.linalg.norm(pos - obstacle) < 1.0:
+                    return {"position": pos, "obstacles": state.get("obstacles")}
+        
+        return {"position": pos + action * self.dt, "obstacles": state.get("obstacles")}
+## END
+
+## BEGIN: planner.py
+class ModelPredictivePlanner(abc.ABC):
+    def __init__(self, world_model: WorldModel, horizon: int, dt: float):
+        super().__init__()
+        self.horizon = horizon
+        self.dt = dt
+        self.model = world_model
+
+    @abc.abstractmethod
+    def plan(self, initial_state: State, goal: TensorType) -> Trajectory:
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def cost_function(self, actions: TensorType, initial_state: TensorType, goal: TensorType) -> TensorType:
+        raise NotImplementedError
+# END
+
+class CrossEntropyMethodPlanner(ModelPredictivePlanner):
+    """Simple sampling-based MPC planner using Cross-Entropy Method."""
+
+    def __init__(
+        self,
+        state_cost: List[float],
+        action_cost: List[float],
+        control_bounds: Tuple[float, float],
+        n_iterations: int,
+        n_rollouts: int,
+        n_elites: int,
+        world_model: WorldModel,
+        dt: float,
+        **kwargs,
+    ):
+        super().__init__(world_model=world_model, dt=dt, **kwargs)
+        self.Q = np.diag(state_cost)
+        self.R = np.diag(action_cost)
+        self.mu = np.zeros(2)
+        self.sigma = np.ones(2)
+        self.control_bounds = control_bounds
+        self.n_rollouts = n_rollouts
+        self.n_elites = n_elites
+        self.n_iterations = n_iterations
+
+    def cost_function(self, actions, initial_state, goal):
+        """Total cost over horizon"""
+        u = actions.reshape((self.horizon, 2))
+        cost = 0.0
+        x = initial_state.copy()
+        obstacles = initial_state.get("obstacles")
+
+        for t in range(self.horizon):
+            # Predict next state
+            x = self.model(x, u[t])
+
+            # Obstacle cost (penalize collisions)
+            if obstacles is not None:
+                for obstacle in obstacles:
+                    if np.linalg.norm(x["position"] - obstacle) < 1.0:
+                        cost += 1e10
+                        return cost
+
+            # State cost (distance to goal)
+            state_error = x["position"] - goal
+            cost += state_error.T @ self.Q @ state_error
+
+            # Control cost (penalize large velocities)
+            cost += u[t].T @ self.R @ u[t]
+
+        return cost
+
+    def plan(self, initial_state, goal):
+        actions = np.zeros(self.horizon * 2)
+
+        def rollout():
+            actions = np.random.normal(loc=self.mu, scale=self.sigma, size=(self.horizon, 2))
+            actions = np.clip(actions, self.control_bounds[0], self.control_bounds[1])
+            return actions
+
+        trajectories = []
+        for _ in range(self.n_iterations):
+            trajectories = []
+            for _ in range(self.n_rollouts):
+                traj = rollout()
+                cost = self.cost_function(actions, initial_state, goal)
+                trajectories.append((traj, cost))
+            trajectories.sort(key=lambda x: x[1], reverse=True)
+            self.mu = np.mean([traj for traj, _ in trajectories[:self.n_elites]], axis=0)
+            self.sigma = np.std([traj for traj, _ in trajectories[:self.n_elites]], axis=0)
+
+        return rollout()
+
+
+def run(n_cem_steps: int, n_rollouts_per_step: int, n_elites: int, max_iterations: int, horizon: int, dt: float):
+
+    world_model = SimpleDiscreteTimeDynamics(dt=dt)
+    planner = CrossEntropyMethodPlanner(
+        world_model=world_model,
+        state_cost=[10.0, 10.0],
+        action_cost=[1.0, 1.0],
+        control_bounds=(-2.0, 2.0),
+        n_iterations=n_cem_steps,
+        n_rollouts=n_rollouts_per_step,
+        n_elites=n_elites,
+        horizon=horizon,
+        dt=dt,
+    )
+    state = {
+        "position": np.array([0.0, 0.0]),
+        "obstacles": np.array([[1.0, 1.0]]),
+    }
+
+    goal = np.array([20.0, 35.0])
+    actions = planner.plan(state, goal)
+    print(actions)
+
+    trajectory = [state["position"].copy()]
+
+    # Simulate navigation
+    for step in range(max_iterations):
+        # Compute optimal control
+        control = planner.plan(state, goal)[0]
+
+        # Apply control and update position
+        state = planner.model(state, control)
+        trajectory.append(state["position"].copy())
+        pos = state["position"]
+
+        print(
+            f"Step {step}: pos=({pos[0]:.2f}, {pos[1]:.2f}), control=({control[0]:.2f}, {control[1]:.2f})"
+        )
+
+        # Check if reached goal
+        if np.linalg.norm(pos - goal) < 0.5:
+            print("Goal reached!")
+            break
+
+    print("\nTrajectory:")
+    for i, p in enumerate(trajectory):
+        print(f"  {i}: ({p[0]:.2f}, {p[1]:.2f})")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--n-cem-steps", type=int, default=100)
+    parser.add_argument("--n-rollouts-per-step", type=int, default=32)
+    parser.add_argument("--n-elites", type=int, default=8)
+    parser.add_argument("--max-iterations", type=int, default=20)
+    parser.add_argument("--horizon", type=int, default=5)
+    parser.add_argument("--dt", type=float, default=1.0)
+    args = parser.parse_args()
+
+    run(**vars(args))

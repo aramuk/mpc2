@@ -1,5 +1,6 @@
 import abc
 import argparse
+import queue
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -128,8 +129,78 @@ class CrossEntropyMethodPlanner(ModelPredictivePlanner):
 
         return rollout()
 
+## BEGIN: robot.py
+class Robot:
+    def __init__(self, initial_state: State, dynamics: WorldModel):
+        self._initial_state = initial_state
+        self.dynamics = dynamics
+        self.reset()
 
-def run(n_cem_steps: int, n_rollouts_per_step: int, n_elites: int, max_iterations: int, horizon: int, dt: float):
+    def reset(self):
+        self.state = self._initial_state.copy()
+        self.t = 0.0
+
+    @property
+    def pos(self):
+        return self.state["position"]
+
+    def step(self, action: TensorType):
+        self.state = self.dynamics(self.state, action)
+        self.t += 1.0
+
+    def get_observations(self):
+        if int(self.t) % 10 == 0:
+            return self.state["position"] + np.ones((1, 2))
+        else:
+            return None
+## END
+
+## BEGIN: server.py
+class Server:
+    def __init__(
+        self,
+        initial_state: State,
+        planner: ModelPredictivePlanner,
+    ):
+        self._initial_state = initial_state
+        self._obs_buffer = queue.Queue(maxsize=10)
+        self.reset()
+        self.planner = planner
+        self.t = 0.0
+
+    def reset(self):
+        self.t = 0.0
+        self.state = self._initial_state.copy()
+        self._obs_buffer.queue.clear()
+        self._obs_buffer.put(self.state["obstacles"].shape[0])
+
+    @property
+    def pos(self) -> State:
+        return self.state["position"]
+
+    def update(self, pos: TensorType, obs: TensorType, ts: float = 1.0):
+        if self._obs_buffer.full():
+            n_expired = self._obs_buffer.get()
+            self.state["obstacles"] = self.state["obstacles"][n_expired:]
+        self._obs_buffer.put(obs.shape[0])
+        self.state["obstacles"] = np.concatenate([self.state["obstacles"], obs], axis=0)
+        self.state["position"] = pos
+        self.t = ts
+
+    def plan(self, goal: TensorType):
+        return self.planner.plan(self.state, goal)
+## END
+
+
+def run(goal: Tuple[float, float], robot_initial_pos: Tuple[float, float], n_cem_steps: int, n_rollouts_per_step: int, n_elites: int, max_iterations: int, horizon: int, dt: float):
+
+    dynamics = SimpleDiscreteTimeDynamics(dt=dt)
+    initial_state = {
+        "position": np.array(robot_initial_pos),
+        "obstacles": np.array([[1.0, 1.0]]),
+    }
+
+    robot = Robot(initial_state, dynamics)
 
     world_model = SimpleDiscreteTimeDynamics(dt=dt)
     planner = CrossEntropyMethodPlanner(
@@ -143,49 +214,47 @@ def run(n_cem_steps: int, n_rollouts_per_step: int, n_elites: int, max_iteration
         horizon=horizon,
         dt=dt,
     )
-    state = {
-        "position": np.array([0.0, 0.0]),
-        "obstacles": np.array([[1.0, 1.0]]),
-    }
 
-    goal = np.array([20.0, 35.0])
-    actions = planner.plan(state, goal)
-    print(actions)
+    server = Server({"obstacles": np.array([[np.inf, np.inf]])}, planner)
 
-    trajectory = [state["position"].copy()]
+    goal = np.array(goal)
 
-    # Simulate navigation
-    for step in range(max_iterations):
-        # Compute optimal control
-        control = planner.plan(state, goal)[0]
+    actions = queue.Queue()
 
-        # Apply control and update position
-        state = planner.model(state, control)
-        trajectory.append(state["position"].copy())
-        pos = state["position"]
+    while robot.t <= max_iterations and np.linalg.norm(robot.pos - goal) > 0.5:
+        should_update = (obs := robot.get_observations()) is not None
+        if should_update:
+            print(f"Updating server at t={robot.t:.2f}")
+            server.update(robot.pos, obs, robot.t)
 
+        if actions.empty() or should_update:
+            for control in server.plan(goal):
+                actions.put(control)
+        control = actions.get()
         print(
-            f"Step {step}: pos=({pos[0]:.2f}, {pos[1]:.2f}), control=({control[0]:.2f}, {control[1]:.2f})"
+            f"[t={robot.t:.2f}]: pos=({robot.pos[0]:.2f}, {robot.pos[1]:.2f}), control=({control[0]:.2f}, {control[1]:.2f})"
         )
+        robot.step(control)
 
-        # Check if reached goal
-        if np.linalg.norm(pos - goal) < 0.5:
-            print("Goal reached!")
-            break
-
-    print("\nTrajectory:")
-    for i, p in enumerate(trajectory):
-        print(f"  {i}: ({p[0]:.2f}, {p[1]:.2f})")
-
+    if np.linalg.norm(robot.pos - goal) <= 0.5:
+        print(
+            f"Goal reached in t={robot.t:.2f}. robot_pos=({robot.pos[0]:.2f}, {robot.pos[1]:.2f})"
+        )
+    else:
+        print(
+            f"Failed to reach goal in t={robot.t:.2f}. robot_pos=({robot.pos[0]:.2f}, {robot.pos[1]:.2f})"
+        )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--n-cem-steps", type=int, default=100)
     parser.add_argument("--n-rollouts-per-step", type=int, default=32)
     parser.add_argument("--n-elites", type=int, default=8)
-    parser.add_argument("--max-iterations", type=int, default=20)
+    parser.add_argument("--max-iterations", type=int, default=100)
     parser.add_argument("--horizon", type=int, default=5)
     parser.add_argument("--dt", type=float, default=1.0)
+    parser.add_argument("--goal", type=tuple, default=(20.0, 35.0))
+    parser.add_argument("--robot-initial-pos", type=tuple, default=(0.0, 0.0))
     args = parser.parse_args()
 
     run(**vars(args))

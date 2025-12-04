@@ -1,7 +1,6 @@
 from typing import List, Tuple
 
 import click
-from scipy.optimize import minimize
 
 from mpc2.planner import ModelPredictivePlanner
 import mpc2.utils as U

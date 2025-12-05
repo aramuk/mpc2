@@ -1,5 +1,10 @@
 from Compiler import mpc_math
 
+import numpy as np
+
+program.use_edabit(True)
+
+
 # Configuration
 HORIZON = 5
 N_ITERATIONS = 10
@@ -19,94 +24,126 @@ R[1][1] = sfix(1.0)
 CONTROL_MIN = sfix(-2.0)
 CONTROL_MAX = sfix(2.0)
 
+
 def dynamics(pos_x, pos_y, action_x, action_y):
     """Simple dynamics: position += action * dt"""
     new_x = pos_x + action_x * DT
     new_y = pos_y + action_y * DT
     return new_x, new_y
 
+
 def cost_function(actions, pos_x, pos_y, goal_x, goal_y):
     """Compute trajectory cost over horizon"""
     total_cost = sfix(0)
-    curr_x, curr_y = pos_x, pos_y
-    
+    curr_x = pos_x
+    curr_y = pos_y
+
+    print_ln("Computing cost with initial total cost: %s", total_cost.reveal())
+
     @for_range(HORIZON)
     def _(t):
         action_x = actions[t * 2]
         action_y = actions[t * 2 + 1]
-        
+
         next_x, next_y = dynamics(curr_x, curr_y, action_x, action_y)
         curr_x.update(next_x)
         curr_y.update(next_y)
-        
+
         error_x = curr_x - goal_x
         error_y = curr_y - goal_y
+        print_ln("Error: (%s, %s)", error_x.reveal(), error_y.reveal())
         state_cost = Q[0][0] * error_x * error_x + Q[1][1] * error_y * error_y
-        
+        print_ln("State cost: %s", state_cost.reveal())
         control_cost = R[0][0] * action_x * action_x + R[1][1] * action_y * action_y
-        
-        total_cost.update(total_cost + state_cost + control_cost)
-    
+        print_ln("Control cost: %s", control_cost.reveal())
+        total_cost.iadd(state_cost + control_cost)
+        print_ln("Total cost: %s", total_cost.reveal())
+
+    print_ln("Final total cost: %s", total_cost.reveal())
     return total_cost
+
+@vectorize
+def clip_actions(action):
+    """Clip actions to bounds"""
+    low = action < CONTROL_MIN
+    high = action > CONTROL_MAX
+    return low.if_else(CONTROL_MIN, high.if_else(CONTROL_MAX, action))
 
 def sample_actions(mu, sigma):
     """Sample actions from normal distribution and clip to bounds"""
-    actions = sfix.Array(HORIZON * 2)
+    # sample = sfix.input_tensor_via(1, np.random.randn(HORIZON, 2))
+    actions = sfix.input_tensor_via(1, np.random.randn(HORIZON, 2))
+
+    print_ln("Sampled actions: %s", actions.reveal())
     
-    @for_range(HORIZON * 2)
+    @for_range_opt_multithread(4, HORIZON)
     def _(i):
-        sample = sfix.get_random(-1, 1) * sigma[i] + mu[i]
-        clipped = sample.min(CONTROL_MAX).max(CONTROL_MIN)
-        actions[i] = clipped
-    
+        actions[i].assign_vector(actions[i].get_vector() * sigma.get_vector())
+        actions[i].assign_vector(actions[i].get_vector() + mu.get_vector())
+
+        # low = actions[i].get_vector() < CONTROL_MIN
+        # high = actions[i].get_vector() > CONTROL_MAX
+        # clipped = low.if_else(CONTROL_MIN, high.if_else(CONTROL_MAX, actions[i].get_vector()))
+        # actions[i].assign_vector(clipped)
+
+    actions.assign_vector(clip_actions(actions.get_vector()))
     return actions
 
-def plan(pos_x, pos_y, goal_x, goal_y):
-    """Cross-Entropy Method planning - returns full trajectory"""
-    mu = sfix.Array(HORIZON * 2)
-    sigma = sfix.Array(HORIZON * 2)
-    
-    @for_range(HORIZON * 2)
-    def _(i):
-        mu[i] = sfix(0)
-        sigma[i] = sfix(1)
-    
-    @for_range(N_ITERATIONS)
-    def _(iter_idx):
-        trajectories = sfix.Matrix(N_ROLLOUTS, HORIZON * 2)
-        costs = sfix.Array(N_ROLLOUTS)
-        
-        @for_range(N_ROLLOUTS)
-        def _(rollout_idx):
-            traj = sample_actions(mu, sigma)
-            print_ln("Rollout %s/%s, trajectory: %s", rollout_idx, N_ROLLOUTS, traj.reveal())
-            cost = cost_function(traj, pos_x, pos_y, goal_x, goal_y)
-            costs[rollout_idx] = cost
-            print_ln("Iteration %s/%s, rollout %s/%s, cost: %s", iter_idx, N_ITERATIONS, rollout_idx, N_ROLLOUTS, cost.reveal())
-            
+
+class Planner:
+    def __init__(self, mu, sigma):
+        self.mu = mu
+        self.sigma = sigma
+
+    def plan(self, pos_x, pos_y, goal_x, goal_y):
+        """Cross-Entropy Method planning - returns full trajectory"""
+        @for_range(N_ITERATIONS)
+        def _(iter_idx):
+            trajectories = sfix.Tensor((N_ROLLOUTS, HORIZON, 2))
+            costs = sfix.Tensor((N_ROLLOUTS,))
+
+            @for_range(N_ROLLOUTS)
+            def _(rollout_idx):
+                traj = sample_actions(self.mu, self.sigma)
+                print_ln(
+                    "Rollout %s/%s, trajectory: %s", rollout_idx, N_ROLLOUTS, traj.reveal()
+                )
+                cost = cost_function(traj, pos_x, pos_y, goal_x, goal_y)
+                costs[rollout_idx] = cost
+                print_ln(
+                    "Iteration %s/%s, rollout %s/%s, cost: %s",
+                    iter_idx,
+                    N_ITERATIONS,
+                    rollout_idx,
+                    N_ROLLOUTS,
+                    cost.reveal(),
+                )
+
+                trajectories.assign_part_vector(traj.get_vector(), rollout_idx)
+                # @for_range(HORIZON * 2)
+                # def _(j):
+                #     trajectories[rollout_idx][j] = traj[j]
+
             @for_range(HORIZON * 2)
-            def _(j):
-                trajectories[rollout_idx][j] = traj[j]
-        
-        @for_range(HORIZON * 2)
-        def _(i):
-            sum_val = sfix(0)
-            sum_sq = sfix(0)
-            
-            @for_range(N_ELITES)
-            def _(elite_idx):
-                val = trajectories[elite_idx][i]
-                sum_val.update(sum_val + val)
-                sum_sq.update(sum_sq + val * val)
-            
-            new_mu = sum_val / sfix(N_ELITES)
-            variance = sum_sq / sfix(N_ELITES) - new_mu * new_mu
-            new_sigma = mpc_math.sqrt(variance.max(sfix(0.01)))
-            
-            mu[i] = new_mu
-            sigma[i] = new_sigma
-    
-    return sample_actions(mu, sigma)
+            def _(i):
+                sum_val = sfix(0)
+                sum_sq = sfix(0)
+
+                @for_range(N_ELITES)
+                def _(elite_idx):
+                    val = trajectories[elite_idx][i]
+                    sum_val.iadd(val)
+                    sum_sq.iadd(val * val)
+
+                new_mu = sum_val / sfix(N_ELITES)
+                variance = sum_sq / sfix(N_ELITES) - new_mu * new_mu
+                new_sigma = mpc_math.sqrt(variance.max(sfix(0.01)))
+
+                mu[i] = new_mu
+                sigma[i] = new_sigma
+
+        return sample_actions(mu, sigma)
+
 
 # Main execution
 print_ln("Starting MPC robot navigation")
@@ -120,37 +157,44 @@ pos_y = sfix.get_input_from(0)
 print_ln("Goal: (%s, %s)", goal_x.reveal(), goal_y.reveal())
 print_ln("Initial position: (%s, %s)", pos_x.reveal(), pos_y.reveal())
 
+mu = sfix.input_tensor_via(1, np.zeros(2))
+sigma = sfix.input_tensor_via(1, np.ones(2))
+planner = Planner(mu, sigma)
+
 print_ln("Starting MPC control loop")
 # Main control loop
 @for_range(MAX_STEPS)
 def _(step):
     # Server (party 1) performs planning on secret data
     print_ln("Planning step %s", step)
-    trajectory = plan(pos_x, pos_y, goal_x, goal_y)
-    
+    trajectory = planner.plan(pos_x, pos_y, goal_x, goal_y)
+
     # Reveal full trajectory to party 0 (robot) only
-    revealed_actions = sfix.Array(HORIZON * 2)
+    revealed_trajectory = sfix.Tensor((HORIZON, 2))
+
     @for_range(HORIZON * 2)
     def _(i):
-        revealed_actions[i] = trajectory[i].reveal_to(0)
-    
+        revealed_trajectory[i].assign_vector(trajectory[i].reveal_to(0))
+
     # Party 0 executes first action locally (in cleartext)
     # We still update the shared position for next planning iteration
     action_x = trajectory[0]
     action_y = trajectory[1]
-    
+
     new_x, new_y = dynamics(pos_x, pos_y, action_x, action_y)
     pos_x.update(new_x)
     pos_y.update(new_y)
-    
+
     # Print progress (reveal to both parties)
     @if_((step % 5).reveal() == 0)
     def _():
-        print_ln("Step %s: pos=(%s, %s)", 
-                 step, pos_x.reveal(), pos_y.reveal())
+        print_ln("Step %s: pos=(%s, %s)", step, pos_x.reveal(), pos_y.reveal())
+
 
 # Final result
 print_ln("Final position: (%s, %s)", pos_x.reveal(), pos_y.reveal())
-final_dist_sq = (pos_x - goal_x) * (pos_x - goal_x) + (pos_y - goal_y) * (pos_y - goal_y)
+final_dist_sq = (pos_x - goal_x) * (pos_x - goal_x) + (pos_y - goal_y) * (
+    pos_y - goal_y
+)
 final_dist = mpc_math.sqrt(final_dist_sq)
 print_ln("Distance to goal: %s", final_dist.reveal())

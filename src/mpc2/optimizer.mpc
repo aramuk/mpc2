@@ -1,0 +1,25 @@
+from Compiler import ml
+
+debug = False
+
+program.options_from_args()
+
+import numpy as np
+from scipy.optimize import minimize
+
+# Define the function to minimize
+def objective_function(x):
+    return x[0]**2 + x[1]**2  # Simple quadratic function
+
+if __name__ == "__main__":
+    # Starting point
+    initial_guess = [10.0, 10.0]
+
+    # Minimize the function
+    result = minimize(objective_function, initial_guess, method='Nelder-Mead')
+
+    # Display the results
+    print("Optimal solution:", result.x)
+    print("Function value at optimal solution:", result.fun)
+    print("Number of iterations:", result.nit)
+    print("Success:", result.success)

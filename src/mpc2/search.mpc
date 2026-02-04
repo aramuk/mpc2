@@ -1,0 +1,273 @@
+"""
+Simple search algorithms for planning in MP-SPDZ.
+"""
+
+from typing import List, Optional, Tuple
+import random
+import math
+
+from Compiler import ml
+
+Point = Tuple[int, int]
+Grid = List[List[int]]
+
+
+def generate_grid_with_obstacles(height: int, width: int, obstacles: Optional[List[Point]] = None) -> Grid:
+    """
+    Generate a 2D grid with obstacles.
+
+    Args:
+        height: Number of rows in the grid
+        width: Number of columns in the grid
+        obstacles: List of (row, col) tuples marking obstacle positions
+
+    Returns:
+        A 2D grid where 0 = free space, 1 = obstacle
+    """
+    grid = [[0 for _ in range(width)] for _ in range(height)]
+
+    if obstacles:
+        for row, col in obstacles:
+            if 0 <= row < height and 0 <= col < width:
+                grid[row][col] = 1
+
+    return grid
+
+
+def dfs(grid: Grid, pos: Point, goal: Point) -> List[Point]:
+    """Chart a trajectory from `pos` to `goal` in `grid` using depth-first search."""
+    height = len(grid)
+    width = len(grid[0]) if height > 0 else 0
+
+    if not (0 <= pos[0] < height and 0 <= pos[1] < width):
+        return []
+    if not (0 <= goal[0] < height and 0 <= goal[1] < width):
+        return []
+    if grid[pos[0]][pos[1]] == 1 or grid[goal[0]][goal[1]] == 1:
+        return []
+
+    visited = set()
+    path = []
+
+    def _dfs(current: Point) -> bool:
+        if current == goal:
+            path.append(current)
+            return True
+
+        if current in visited:
+            return False
+
+        row, col = current
+        if not (0 <= row < height and 0 <= col < width):
+            return False
+        if grid[row][col] == 1:
+            return False
+
+        visited.add(current)
+        path.append(current)
+
+        # Explore neighbors: up, right, down, left
+        directions = [(-1, 0), (0, 1), (1, 0), (0, -1)]
+        for dr, dc in directions:
+            neighbor = (row + dr, col + dc)
+            if _dfs(neighbor):
+                return True
+
+        path.pop()
+        return False
+
+    _dfs(pos)
+    return path
+
+
+def rrt(grid: Grid, pos: Point, goal: Point, max_iterations: int = 1000, step_size: float = 1.0) -> List[Point]:
+    """Chart a trajectory from `pos` to `goal` in `grid` using the RRT algorithm."""
+    height = len(grid)
+    width = len(grid[0]) if height > 0 else 0
+
+    if not (0 <= pos[0] < height and 0 <= pos[1] < width):
+        return []
+    if not (0 <= goal[0] < height and 0 <= goal[1] < width):
+        return []
+    if grid[pos[0]][pos[1]] == 1 or grid[goal[0]][goal[1]] == 1:
+        return []
+
+    def distance(p1: Point, p2: Point) -> float:
+        return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
+
+    def is_collision_free(p1: Point, p2: Point) -> bool:
+        """Check if the line segment from p1 to p2 is collision-free."""
+        steps = max(int(distance(p1, p2) / 0.5), 1)
+        for i in range(steps + 1):
+            t = i / steps
+            row = int(round(p1[0] + t * (p2[0] - p1[0])))
+            col = int(round(p1[1] + t * (p2[1] - p1[1])))
+            if not (0 <= row < height and 0 <= col < width):
+                return False
+            if grid[row][col] == 1:
+                return False
+        return True
+
+    def steer(from_point: Point, to_point: Point) -> Point:
+        """Steer from from_point towards to_point by step_size."""
+        d = distance(from_point, to_point)
+        if d <= step_size:
+            return to_point
+        ratio = step_size / d
+        new_row = from_point[0] + ratio * (to_point[0] - from_point[0])
+        new_col = from_point[1] + ratio * (to_point[1] - from_point[1])
+        return (int(round(new_row)), int(round(new_col)))
+
+    # Tree structure: node -> parent
+    tree = {pos: None}
+    nodes = [pos]
+
+    for _ in range(max_iterations):
+        # Sample random point (with goal bias)
+        if random.random() < 0.1:
+            sample = goal
+        else:
+            sample = (random.randint(0, height - 1), random.randint(0, width - 1))
+
+        # Find nearest node in tree
+        nearest = min(nodes, key=lambda n: distance(n, sample))
+
+        # Steer towards sample
+        new_point = steer(nearest, sample)
+
+        # Check collision
+        if is_collision_free(nearest, new_point):
+            if new_point not in tree:
+                tree[new_point] = nearest
+                nodes.append(new_point)
+
+                # Check if we reached the goal
+                if distance(new_point, goal) < step_size and is_collision_free(new_point, goal):
+                    tree[goal] = new_point
+                    # Reconstruct path
+                    path = []
+                    current = goal
+                    while current is not None:
+                        path.append(current)
+                        current = tree[current]
+                    return path[::-1]
+
+    return []
+
+
+def d_star(grid: Grid, pos: Point, goal: Point) -> List[Point]:
+    """Chart a trajectory from `pos` to `goal` in `grid` using the D* algorithm."""
+    import heapq
+
+    height = len(grid)
+    width = len(grid[0]) if height > 0 else 0
+
+    if not (0 <= pos[0] < height and 0 <= pos[1] < width):
+        return []
+    if not (0 <= goal[0] < height and 0 <= goal[1] < width):
+        return []
+    if grid[pos[0]][pos[1]] == 1 or grid[goal[0]][goal[1]] == 1:
+        return []
+
+    # D* Lite implementation (simplified)
+    INF = float('inf')
+
+    # g(s): cost from goal to s
+    g = {(r, c): INF for r in range(height) for c in range(width)}
+    # rhs(s): one-step lookahead based on g values
+    rhs = {(r, c): INF for r in range(height) for c in range(width)}
+
+    rhs[goal] = 0
+
+    def heuristic(s: Point) -> float:
+        return abs(s[0] - pos[0]) + abs(s[1] - pos[1])
+
+    def calculate_key(s: Point) -> Tuple[float, float]:
+        return (min(g[s], rhs[s]) + heuristic(s), min(g[s], rhs[s]))
+
+    def get_neighbors(s: Point) -> List[Point]:
+        row, col = s
+        neighbors = []
+        directions = [(-1, 0), (0, 1), (1, 0), (0, -1)]
+        for dr, dc in directions:
+            nr, nc = row + dr, col + dc
+            if 0 <= nr < height and 0 <= nc < width and grid[nr][nc] == 0:
+                neighbors.append((nr, nc))
+        return neighbors
+
+    def cost(s1: Point, s2: Point) -> float:
+        if grid[s2[0]][s2[1]] == 1:
+            return INF
+        return 1.0
+
+    # Priority queue: (key, state)
+    open_list = []
+    heapq.heappush(open_list, (calculate_key(goal), goal))
+    open_set = {goal}
+
+    def update_vertex(u: Point):
+        if u != goal:
+            neighbors = get_neighbors(u)
+            if neighbors:
+                rhs[u] = min(cost(u, s) + g[s] for s in neighbors)
+            else:
+                rhs[u] = INF
+
+        if u in open_set:
+            open_set.remove(u)
+            # Remove from heap (lazy deletion)
+
+        if g[u] != rhs[u]:
+            heapq.heappush(open_list, (calculate_key(u), u))
+            open_set.add(u)
+
+    def compute_shortest_path():
+        while open_list and (open_list[0][0] < calculate_key(pos) or rhs[pos] != g[pos]):
+            key, u = heapq.heappop(open_list)
+
+            if u in open_set:
+                open_set.remove(u)
+            else:
+                continue  # Lazy deletion: skip outdated entries
+
+            if g[u] > rhs[u]:
+                g[u] = rhs[u]
+                for s in get_neighbors(u):
+                    update_vertex(s)
+            else:
+                g[u] = INF
+                update_vertex(u)
+                for s in get_neighbors(u):
+                    update_vertex(s)
+
+    compute_shortest_path()
+
+    # Reconstruct path from pos to goal
+    if g[pos] == INF:
+        return []
+
+    path = [pos]
+    current = pos
+    while current != goal:
+        neighbors = get_neighbors(current)
+        if not neighbors:
+            return []
+        # Move to neighbor with lowest g + cost
+        next_node = min(neighbors, key=lambda s: g[s] + cost(current, s))
+        if g[next_node] == INF:
+            return []
+        path.append(next_node)
+        current = next_node
+        if len(path) > height * width:  # Prevent infinite loops
+            return []
+
+    return path
+
+
+grid = generate_grid_with_obstacles(10, 10)
+start = (0, 0)
+goal = (8, 5)
+print_ln("Navigating from %s to %s", str(start), str(goal))
+# trajectory = dfs(grid, (0, 0), (8, 5))
+trajectory = rrt(grid, start, goal)
+print_ln(trajectory)

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -e
+set -ex
 
 rootdir=$(dirname $(readlink -f "${BASH_SOURCE[0]}"))
 initial_path="$1"
@@ -25,8 +25,14 @@ mpspdz_dir="$rootdir/mp-spdz-0.4.1"
 compile_path="$mpspdz_dir/Programs/Source/$progname"
 cp "$initial_path" "$compile_path"
 
+source .venv/bin/activate
 pushd "$mpspdz_dir"
-./mascot-party.x -N 2 -p 0 cem &
-./mascot-party.x -N 2 -p 1 cem
+if [ "$party" == "robot" ]; then
+    ./mascot-party.x -N 2 -p 0 $stem  
+else
+    ./mascot-party.x -N 2 -p 1 $stem  
+fi
+# ./mascot-party.x -N 2 -p 0 $progname &
+# ./mascot-party.x -N 2 -p 1 $progname
 
 popd

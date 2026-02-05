@@ -10,17 +10,58 @@
 
 import sys
 import enum
+from typing import List, Tuple
 
-from oram import OptimalORAM
+import networkx as nx
+
+from oram import OptimalORAM, log2
 from dijkstra import convert_graph, dijkstra, test_dijkstra
+
+Edge = Tuple[int, int, int]
+
+def convert_edges_to_oram(edges_list: List[Edge], edge_index_list: List[int], n_loops=None, oram_type=OptimalORAM, int_type=sint):
+    # print_ln("Edge List: %s", str(edges_list))
+    # print_ln("Edge Index List: %s", str(edge_index_list))
+    edges = oram_type(len(edges_list), \
+                          entry_size=(log2(len(edge_index_list)), log2(len(edge_index_list)), 1), \
+                          init_rounds=0, value_type=int_type.basic_type)
+    e_index = oram_type(len(edge_index_list), entry_size=log2(len(edges_list)), \
+                            value_type=int_type.basic_type)
+    for i in range(n_loops or edges.size):
+        cint(i).print_reg('edge')
+        # time()
+        edges[i] = edges_list[i]
+    vert_loops = n_loops * e_index.size // edges.size \
+        if n_loops else e_index.size
+    for i in range(vert_loops):
+        cint(i).print_reg('vert')
+        # time()
+        e_index[i] = edge_index_list[i]
+    return edges, e_index
 
 class MPSPDZTestGraphKind(enum.Enum):
     SIMPLE = "simple"
     KARATE = "karate"
+    COMPLETE = "complete"
 
     @staticmethod
-    def generate_graph(graph_type: 'MPSPDZTestGraphKind'):
+    def generate_graph(graph_type: 'MPSPDZTestGraphKind', oram_type=OptimalORAM, int_type=sint):
         match graph_type:
+            case MPSPDZTestGraphKind.COMPLETE:
+                G = nx.complete_graph(32, create_using=nx.DiGraph)
+                for u in G:
+                    for v in G[u]:
+                        G.edges[u, v]['weight'] = 1
+                # for edge in G.edges(data=True):
+                #     print_ln("Edge %s", str(edge))
+                edges, e_index = convert_edges_to_oram(*convert_graph(G))
+                source = sint(0)
+                return source, edges, e_index
+            case MPSPDZTestGraphKind.KARATE:
+                G = nx.karate_club_graph()
+                edges, e_index = convert_edges_to_oram(*convert_graph(G))
+                source = sint(0)
+                return source, edges, e_index
             case MPSPDZTestGraphKind.SIMPLE | _:                
                 # structure for edges
                 # contains tuples of form (neighbor, cost, last neighbor bit)
@@ -58,7 +99,7 @@ def main(graph_type: MPSPDZTestGraphKind):
     source, edges, e_index = MPSPDZTestGraphKind.generate_graph(graph_type)
     print_ln('Generated graph with %s edges and %s vertices. Navigating from vertex %s.', edges.size, e_index.size, source.reveal())
 
-    res = dijkstra(source, edges, e_index, OptimalORAM)
+    res = dijkstra(source, edges, e_index, OptimalORAM, debug=True)
 
     @for_range(res.size)
     def _(i):
@@ -68,5 +109,5 @@ def main(graph_type: MPSPDZTestGraphKind):
 
 
 # graph_type = MPSPDZTestGraphKind(sys.argv[1]) if len(sys.argv) > 1 else MPSPDZTestGraphKind.SIMPLE
-main(MPSPDZTestGraphKind("simple"))
+main(MPSPDZTestGraphKind("complete"))
 

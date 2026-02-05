@@ -9,16 +9,17 @@ authors = [
 requires-python = ">=3.10,<3.11"
 dependencies = [
     "click>=8.3.1",
-    "crypten",
-    "gymnasium[box2d]>=1.2.2",
+    # "crypten",
+    # "gymnasium[box2d]>=1.2.2",
     "mpyc>=0.10",
-    "omegaconf==2.0.6",
-    "scikit-learn>=1.7.2",
-    "scipy>=1.15.3",
+    # "omegaconf==2.0.6",
+    # "scikit-learn>=1.7.2",
+    # "scipy>=1.15.3",
+    "networkx>=3.4.2",
     "seaborn>=0.13.2",
-    "swig>=4.4.0",
-    "torch<=2.3.0",
-    "tqdm>=4.67.1",
+    # "swig>=4.4.0",
+    # "torch<=2.3.0",
+    # "tqdm>=4.67.1",
 ]
 
 [project.scripts]
@@ -28,5 +29,5 @@ mpc2 = "mpc2:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.uv.sources]
-crypten = { git = "https://github.com/aramuk/CrypTen.git" }
+# [tool.uv.sources]
+# crypten = { git = "https://github.com/aramuk/CrypTen.git" }

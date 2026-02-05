@@ -21,9 +21,13 @@ uv sync
 # wget https://raw.githubusercontent.com/facebookresearch/CrypTen/refs/heads/main/configs/default.yaml -P .venv/lib/python3.10/site-packages/configs/
 
 if [ ! -d "mp-spdz-0.4.1" ]; then
+    sudo apt-get install automake build-essential clang cmake git libboost-dev libboost-filesystem-dev libboost-iostreams-dev libboost-thread-dev libgmp-dev libntl-dev libsodium-dev libssl-dev libtool python3
     echo "installing MP-SPDZ"
     wget "https://github.com/data61/MP-SPDZ/releases/download/v0.4.1/mp-spdz-0.4.1.tar.xz"
     tar -xvf mp-spdz-0.4.1.tar.xz
+    pushd mp-spdz-0.4.1
+    make setup
+    popd
 fi
 
 # if [ ! -d "BEHAVIOR-1K" ]; then

@@ -5,7 +5,7 @@ set -ex
 rootdir=$(dirname $(readlink -f "${BASH_SOURCE[0]}"))
 initial_path="$1"
 progname=$(basename "$1")
-stem=$(basename "$progname" .py)
+stem=$(basename "$progname" .mpc)
 shift
 party="$1"
 shift
@@ -27,8 +27,9 @@ cp "$initial_path" "$compile_path"
 
 source .venv/bin/activate
 pushd "$mpspdz_dir"
+./compile.py "$stem"
 if [ "$party" == "robot" ]; then
-    ./mascot-party.x -N 2 -p 0 $stem  
+    ./mascot-party.x -N 2 -p 0 $stem
 else
     ./mascot-party.x -N 2 -p 1 $stem  
 fi

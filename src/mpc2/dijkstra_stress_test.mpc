@@ -29,13 +29,13 @@ def convert_edges_to_oram(edges_list: List[Edge], edge_index_list: List[int], n_
                             value_type=int_type.basic_type)
     for i in range(n_loops or edges.size):
         cint(i).print_reg('edge')
-        # time()
+        time()
         edges[i] = edges_list[i]
     vert_loops = n_loops * e_index.size // edges.size \
         if n_loops else e_index.size
     for i in range(vert_loops):
         cint(i).print_reg('vert')
-        # time()
+        time()
         e_index[i] = edge_index_list[i]
     return edges, e_index
 
@@ -43,15 +43,24 @@ class MPSPDZTestGraphKind(enum.Enum):
     SIMPLE = "simple"
     KARATE = "karate"
     COMPLETE = "complete"
+    CYCLE = "cycle"
+    BALANCED_TREE = "balanced_tree"
 
     @staticmethod
     def generate_graph(graph_type: 'MPSPDZTestGraphKind', oram_type=OptimalORAM, int_type=sint):
         match graph_type:
+            case MPSPDZTestGraphKind.CYCLE:
+                G = nx.cycle_graph(5, create_using=nx.DiGraph)
+                edges, e_index = convert_edges_to_oram(*convert_graph(G))
+                source = sint(0)
+                return source, edges, e_index
+            case MPSPDZTestGraphKind.BALANCED_TREE:
+                G = nx.balanced_tree(2, 4, create_using=nx.DiGraph)
+                edges, e_index = convert_edges_to_oram(*convert_graph(G))
+                source = sint(0)
+                return source, edges, e_index
             case MPSPDZTestGraphKind.COMPLETE:
-                G = nx.complete_graph(32, create_using=nx.DiGraph)
-                for u in G:
-                    for v in G[u]:
-                        G.edges[u, v]['weight'] = 1
+                G = nx.complete_graph(7, create_using=nx.DiGraph)
                 # for edge in G.edges(data=True):
                 #     print_ln("Edge %s", str(edge))
                 edges, e_index = convert_edges_to_oram(*convert_graph(G))
@@ -109,5 +118,5 @@ def main(graph_type: MPSPDZTestGraphKind):
 
 
 # graph_type = MPSPDZTestGraphKind(sys.argv[1]) if len(sys.argv) > 1 else MPSPDZTestGraphKind.SIMPLE
-main(MPSPDZTestGraphKind("complete"))
+main(MPSPDZTestGraphKind("cycle"))
 

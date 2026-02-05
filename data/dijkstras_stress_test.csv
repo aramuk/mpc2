@@ -1,0 +1,10 @@
+id,graph_structure,algorithm,upload_start,upload_end,compute_start,compute_end
+complete5,complete,dijkstras,0,2.73489,4.27548,85.0575
+complete6,complete,dijkstras,0,5.17642,6.77789,130.635
+complete7,complete,dijkstras,0,8.33548,10.8543,198.776
+cycle5,cycle,dijkstras,0,
+cycle6,cycle,dijkstras,0,
+cycle7,cycle,dijkstras,0,
+balanced_tree2x2,balanced_tree,dijkstras,0,
+balanced_tree2x4,balanced_tree,dijkstras,0,
+balanced_tree4x4,balanced_tree,dijkstras,0,

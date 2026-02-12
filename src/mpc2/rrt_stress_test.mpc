@@ -1,0 +1,216 @@
+# RRT stress test for graph-based MPC RRT algorithm
+#
+# Tests the RRT algorithm on various graph types.
+# Run with:
+#   ./build_mpc.sh src/mpc2/rrt_stress_test.mpc
+#   ./run_mpc.sh src/mpc2/rrt_stress_test.mpc robot &
+#   ./run_mpc.sh src/mpc2/rrt_stress_test.mpc server
+
+import sys
+import enum
+from typing import List, Tuple
+
+import networkx as nx
+
+from oram import OptimalORAM, log2
+from dijkstra import convert_graph
+
+Edge = Tuple[int, int, int]
+
+def convert_edges_to_oram(edges_list: List[Edge], edge_index_list: List[int],
+                          n_loops=None, oram_type=OptimalORAM, int_type=sint):
+    edges = oram_type(len(edges_list),
+                      entry_size=(log2(len(edge_index_list)),
+                                  log2(len(edge_index_list)), 1),
+                      init_rounds=0, value_type=int_type.basic_type)
+    e_index = oram_type(len(edge_index_list),
+                        entry_size=log2(len(edges_list)),
+                        value_type=int_type.basic_type)
+    for i in range(n_loops or edges.size):
+        cint(i).print_reg('edge')
+        time()
+        edges[i] = edges_list[i]
+    vert_loops = n_loops * e_index.size // edges.size \
+        if n_loops else e_index.size
+    for i in range(vert_loops):
+        cint(i).print_reg('vert')
+        time()
+        e_index[i] = edge_index_list[i]
+    return edges, e_index
+
+
+def rrt(source, goal, edges, e_index, oram_type, max_iterations=None,
+        int_type=None, debug=False):
+    """ Securely compute RRT on a secret graph. """
+    prog.reading("RRT algorithm", "graph-based")
+    n_vertices = e_index.size
+    n_edges = edges.size
+    if max_iterations is None:
+        max_iterations = n_edges
+
+    parent = oram_type(n_vertices, entry_size=log2(n_vertices),
+                       init_rounds=-1, value_type=int_type)
+    int_type = parent.value_type
+    basic_type = int_type.basic_type
+
+    parent[source] = source
+    goal_reached = MemValue(basic_type(0))
+    v_bits = log2(n_vertices)
+
+    @for_range(max_iterations)
+    def rrt_iter(iteration):
+        if debug:
+            print_ln('rrt loop %s', iteration)
+            time()
+
+        bias = sint.get_random_int(3)
+        use_goal = (bias == 0)
+        v_rand_raw = sint.get_random_int(v_bits)
+        v_rand = if_else(use_goal, basic_type(goal), basic_type(v_rand_raw))
+
+        _, v_rand_empty = parent.read(v_rand)
+
+        current_u = MemValue(basic_type(0))
+        found_exact = MemValue(basic_type(0))
+        exact_u = MemValue(basic_type(0))
+        found_fallback = MemValue(basic_type(0))
+        fallback_u = MemValue(basic_type(0))
+        fallback_v = MemValue(basic_type(0))
+
+        @for_range(n_edges)
+        def scan_edges(ei):
+            dest, weight, le = edges[ei]
+            _, u_empty = parent.read(current_u)
+            u_in_tree = 1 - u_empty
+            _, d_empty = parent.read(dest)
+            d_not_in_tree = d_empty
+
+            valid_ext = u_in_tree * d_not_in_tree
+
+            is_exact = valid_ext * (dest == v_rand) * v_rand_empty
+            is_exact *= (1 - found_exact)
+            exact_u.write(if_else(is_exact, current_u, exact_u))
+            found_exact.write(if_else(is_exact, basic_type(1), found_exact))
+
+            is_fb = valid_ext * (1 - found_exact) * (1 - found_fallback)
+            fallback_u.write(if_else(is_fb, current_u, fallback_u))
+            fallback_v.write(if_else(is_fb, dest, fallback_v))
+            found_fallback.write(if_else(is_fb, basic_type(1), found_fallback))
+
+            current_u.write(current_u + basic_type(le))
+
+        new_parent = if_else(found_exact, exact_u, fallback_u)
+        new_child = if_else(found_exact, v_rand, fallback_v)
+        found_any = found_exact.bit_or(found_fallback)
+        should_add = found_any * (1 - goal_reached)
+
+        parent.access(new_child, new_parent, should_add)
+
+        child_is_goal = (new_child == goal)
+        goal_reached.write(goal_reached.bit_or(child_is_goal * should_add))
+
+        if debug:
+            print_ln('  v_rand=%s, found_exact=%s, found_fb=%s, '
+                     'new_child=%s, new_parent=%s, should_add=%s, '
+                     'goal_reached=%s',
+                     v_rand.reveal(), found_exact.reveal(),
+                     found_fallback.reveal(), new_child.reveal(),
+                     new_parent.reveal(), should_add.reveal(),
+                     goal_reached.reveal())
+
+    return parent, goal_reached
+
+
+class MPSPDZTestGraphKind(enum.Enum):
+    SIMPLE = "simple"
+    KARATE = "karate"
+    COMPLETE = "complete"
+    CYCLE = "cycle"
+    BALANCED_TREE = "balanced_tree"
+
+    @staticmethod
+    def generate_graph(graph_type: 'MPSPDZTestGraphKind', oram_type=OptimalORAM, int_type=sint):
+        match graph_type:
+            case MPSPDZTestGraphKind.CYCLE:
+                G = nx.cycle_graph(7, create_using=nx.DiGraph)
+                edges, e_index = convert_edges_to_oram(*convert_graph(G))
+                source = sint(0)
+                goal = sint(4)
+                return source, goal, edges, e_index
+            case MPSPDZTestGraphKind.BALANCED_TREE:
+                G = nx.balanced_tree(1, 2, create_using=nx.DiGraph)
+                edges, e_index = convert_edges_to_oram(*convert_graph(G))
+                source = sint(0)
+                goal = sint(2)
+                return source, goal, edges, e_index
+            case MPSPDZTestGraphKind.COMPLETE:
+                G = nx.complete_graph(7, create_using=nx.DiGraph)
+                edges, e_index = convert_edges_to_oram(*convert_graph(G))
+                source = sint(0)
+                goal = sint(6)
+                return source, goal, edges, e_index
+            case MPSPDZTestGraphKind.KARATE:
+                G = nx.karate_club_graph()
+                edges, e_index = convert_edges_to_oram(*convert_graph(G))
+                source = sint(0)
+                goal = sint(33)
+                return source, goal, edges, e_index
+            case MPSPDZTestGraphKind.SIMPLE | _:
+                edges = OptimalORAM(4, entry_size=(2, 5, 1))
+                edges[0] = (1, 5, 0)
+                edges[1] = (2, 20, 1)
+                edges[2] = (2, 10, 1)
+                edges[3] = (2, 0, 1)
+
+                e_index = OptimalORAM(3, entry_size=2)
+                e_index[0] = 0
+                e_index[1] = 2
+                e_index[2] = 3
+
+                source = sint(0)
+                goal = sint(2)
+                return source, goal, edges, e_index
+
+# TODO: Adapt runner when moving this alg to its own library file.
+# def run_rrt(graph_size: GraphSize):
+#     match graph_size:
+#         case GraphSize.SIMPLE | _:
+#             source, edges, e_index = generate_simple_graph()
+#
+#     goal = sint(e_index.size - 1)
+#     print_ln('RRT from vertex %s to vertex %s', source.reveal(), goal.reveal())
+#
+#     parent, goal_reached = rrt(source, goal, edges, e_index, OptimalORAM,
+#                                debug=True)
+#
+#     print_ln('Goal reached: %s', goal_reached.reveal())
+#
+#     @for_range(e_index.size)
+#     def _(i):
+#         pv, not_in_tree = parent.read(i)
+#         print_ln('vertex %s: parent=%s (in_tree=%s)',
+#                  i, pv[0].reveal(), (1 - not_in_tree).reveal())
+
+
+
+def main(graph_type: MPSPDZTestGraphKind):
+    print_ln('Generating graph of kind `%s` for RRT', str(graph_type))
+    source, goal, edges, e_index = MPSPDZTestGraphKind.generate_graph(graph_type)
+    print_ln('Generated graph with %s edges and %s vertices.', edges.size,
+             e_index.size)
+    print_ln('RRT from vertex %s to vertex %s', source.reveal(), goal.reveal())
+
+    parent, goal_reached = rrt(source, goal, edges, e_index, OptimalORAM,
+                               debug=True)
+
+    print_ln('Goal reached: %s', goal_reached.reveal())
+
+    @for_range(e_index.size)
+    def _(i):
+        pv, not_in_tree = parent.read(i)
+        print_ln('vertex %s: parent=%s (in_tree=%s)',
+                 i, pv[0].reveal(), (1 - not_in_tree).reveal())
+
+
+# graph_type = MPSPDZTestGraphKind(sys.argv[1]) if len(sys.argv) > 1 else MPSPDZTestGraphKind.SIMPLE
+main(MPSPDZTestGraphKind("cycle"))

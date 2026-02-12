@@ -19,25 +19,38 @@ from dijkstra import convert_graph, dijkstra, test_dijkstra
 
 Edge = Tuple[int, int, int]
 
-def convert_edges_to_oram(edges_list: List[Edge], edge_index_list: List[int], n_loops=None, oram_type=OptimalORAM, int_type=sint):
+
+def convert_edges_to_oram(
+    edges_list: List[Edge],
+    edge_index_list: List[int],
+    n_loops=None,
+    oram_type=OptimalORAM,
+    int_type=sint,
+):
     # print_ln("Edge List: %s", str(edges_list))
     # print_ln("Edge Index List: %s", str(edge_index_list))
-    edges = oram_type(len(edges_list), \
-                          entry_size=(log2(len(edge_index_list)), log2(len(edge_index_list)), 1), \
-                          init_rounds=0, value_type=int_type.basic_type)
-    e_index = oram_type(len(edge_index_list), entry_size=log2(len(edges_list)), \
-                            value_type=int_type.basic_type)
+    edges = oram_type(
+        len(edges_list),
+        entry_size=(log2(len(edge_index_list)), log2(len(edge_index_list)), 1),
+        init_rounds=0,
+        value_type=int_type.basic_type,
+    )
+    e_index = oram_type(
+        len(edge_index_list),
+        entry_size=log2(len(edges_list)),
+        value_type=int_type.basic_type,
+    )
     for i in range(n_loops or edges.size):
-        cint(i).print_reg('edge')
+        cint(i).print_reg("edge")
         time()
         edges[i] = edges_list[i]
-    vert_loops = n_loops * e_index.size // edges.size \
-        if n_loops else e_index.size
+    vert_loops = n_loops * e_index.size // edges.size if n_loops else e_index.size
     for i in range(vert_loops):
-        cint(i).print_reg('vert')
+        cint(i).print_reg("vert")
         time()
         e_index[i] = edge_index_list[i]
     return edges, e_index
+
 
 class MPSPDZTestGraphKind(enum.Enum):
     SIMPLE = "simple"
@@ -47,7 +60,9 @@ class MPSPDZTestGraphKind(enum.Enum):
     BALANCED_TREE = "balanced_tree"
 
     @staticmethod
-    def generate_graph(graph_type: 'MPSPDZTestGraphKind', oram_type=OptimalORAM, int_type=sint):
+    def generate_graph(
+        graph_type: "MPSPDZTestGraphKind", oram_type=OptimalORAM, int_type=sint
+    ):
         match graph_type:
             case MPSPDZTestGraphKind.CYCLE:
                 G = nx.cycle_graph(7, create_using=nx.DiGraph)
@@ -59,56 +74,45 @@ class MPSPDZTestGraphKind(enum.Enum):
                 #     print_ln("Edge %s", str(edge))
             case MPSPDZTestGraphKind.KARATE:
                 G = nx.karate_club_graph()
-            case MPSPDZTestGraphKind.SIMPLE | _:                
-                # structure for edges
-                # contains tuples of form (neighbor, cost, last neighbor bit)
-                edges = OptimalORAM(4, # number of edges
-                                    entry_size=(2, # enough bits for vertices
-                                                5, # enough bits for costs
-                                                1) # always one
+            case MPSPDZTestGraphKind.SIMPLE | _:
+                G = nx.DiGraph()
+                G.add_edges_from(
+                    [
+                        (0, 1, {"weight": 5}),
+                        (0, 2, {"weight": 20}),
+                        (1, 2, {"weight": 10}),
+                        (2, 2, {"weight": 0}),
+                    ]
                 )
-
-                # first edge from vertex 0
-                edges[0] = (1, 5, 0)
-                # second and last edge from vertex 0
-                edges[1] = (2, 20, 1)
-                # edge from vertex 1
-                edges[2] = (2, 10, 1)
-                # dummy edge from vertex 2 to itself
-                edges[3] = (2, 0, 1)
-
-                # structure assigning edge list indices to vertices
-                e_index = OptimalORAM(3, # number vertices
-                                    entry_size=2) # enough bits for edge indices
-
-                # edges from 0 start at 0
-                e_index[0] = 0
-                # edges from 1 start at 2
-                e_index[1] = 2
-                # edges from 2 start at 3
-                e_index[2] = 3
-
-                source = sint(0)
-                return source, edges, e_index
-
         edges, e_index = convert_edges_to_oram(*convert_graph(G))
-        source = sint(0)
+        source = int_type(0)
         return source, edges, e_index
 
+
 def main(graph_type: MPSPDZTestGraphKind):
-    print_ln('Generating graph of kind `%s`', str(graph_type))
+    print_ln("Generating graph of kind `%s`", str(graph_type))
     source, edges, e_index = MPSPDZTestGraphKind.generate_graph(graph_type)
-    print_ln('Generated graph with %s edges and %s vertices. Navigating from vertex %s.', edges.size, e_index.size, source.reveal())
+    print_ln(
+        "Generated graph with %s edges and %s vertices. Navigating from vertex %s.",
+        edges.size,
+        e_index.size,
+        source.reveal(),
+    )
 
     res = dijkstra(source, edges, e_index, OptimalORAM, debug=True)
 
     @for_range(res.size)
     def _(i):
         import util
-        print_ln('from %s to %s at cost %s via vertex %s', source.reveal(), i,
-                res[i][0].reveal(), res[i][1].reveal())
+
+        print_ln(
+            "from %s to %s at cost %s via vertex %s",
+            source.reveal(),
+            i,
+            res[i][0].reveal(),
+            res[i][1].reveal(),
+        )
 
 
 # graph_type = MPSPDZTestGraphKind(sys.argv[1]) if len(sys.argv) > 1 else MPSPDZTestGraphKind.SIMPLE
 main(MPSPDZTestGraphKind("balanced_tree"))
-

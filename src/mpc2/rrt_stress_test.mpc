@@ -38,23 +38,44 @@ def convert_edges_to_oram(edges_list: List[Edge], edge_index_list: List[int],
         e_index[i] = edge_index_list[i]
     return edges, e_index
 
-
 def rrt(source, goal, edges, e_index, oram_type, max_iterations=None,
         int_type=None, debug=False):
-    """ Securely compute RRT on a secret graph. """
+    """ Securely compute RRT (Rapidly-exploring Random Tree) on a secret graph.
+
+    Grows a random tree from source through existing graph edges until
+    goal is reached or max_iterations is exhausted. Uses the same graph
+    representation as :py:func:`dijkstra`.
+
+    :param source: source node (secret or clear-text integer)
+    :param goal: goal node (secret or clear-text integer)
+    :param edges: ORAM representation of edges
+    :param e_index: ORAM representation of vertices
+    :param oram_type: ORAM type to use internally
+    :param max_iterations: when to stop (default: number of edges)
+    :param int_type: secret integer type (default: sint)
+    :param debug: print debug output
+
+    :returns: (parent ORAM, goal_reached flag)
+    """
     prog.reading("RRT algorithm", "graph-based")
     n_vertices = e_index.size
     n_edges = edges.size
     if max_iterations is None:
         max_iterations = n_edges
 
+    # Parent ORAM: vertex -> parent_vertex
+    # init_rounds=-1 ensures all entries start as empty (not in tree)
     parent = oram_type(n_vertices, entry_size=log2(n_vertices),
                        init_rounds=-1, value_type=int_type)
     int_type = parent.value_type
     basic_type = int_type.basic_type
 
+    # Initialize: source is in tree, parent of source is itself
     parent[source] = source
+
     goal_reached = MemValue(basic_type(0))
+
+    # Number of bits for random vertex sampling
     v_bits = log2(n_vertices)
 
     @for_range(max_iterations)
@@ -63,16 +84,24 @@ def rrt(source, goal, edges, e_index, oram_type, max_iterations=None,
             print_ln('rrt loop %s', iteration)
             time()
 
+        # 1. Sample random vertex with ~12.5% goal bias
         bias = sint.get_random_int(3)
         use_goal = (bias == 0)
         v_rand_raw = sint.get_random_int(v_bits)
         v_rand = if_else(use_goal, basic_type(goal), basic_type(v_rand_raw))
 
+        # 2. Check if v_rand is already in tree
         _, v_rand_empty = parent.read(v_rand)
+        # v_rand_empty = 1 means NOT in tree (candidate for exact extension)
 
+        # 3. Scan all edges to find best tree extension
+        #    Exact: tree vertex u with edge to v_rand (v_rand not in tree)
+        #    Fallback: any tree vertex u with edge to non-tree vertex v
         current_u = MemValue(basic_type(0))
+
         found_exact = MemValue(basic_type(0))
         exact_u = MemValue(basic_type(0))
+
         found_fallback = MemValue(basic_type(0))
         fallback_u = MemValue(basic_type(0))
         fallback_v = MemValue(basic_type(0))
@@ -80,32 +109,43 @@ def rrt(source, goal, edges, e_index, oram_type, max_iterations=None,
         @for_range(n_edges)
         def scan_edges(ei):
             dest, weight, le = edges[ei]
+
+            # Check if source vertex (current_u) is in tree
             _, u_empty = parent.read(current_u)
             u_in_tree = 1 - u_empty
+
+            # Check if dest vertex is NOT in tree
             _, d_empty = parent.read(dest)
             d_not_in_tree = d_empty
 
+            # Valid extension: source in tree, dest not in tree
             valid_ext = u_in_tree * d_not_in_tree
 
+            # Exact match: valid AND dest == v_rand AND v_rand not yet in tree
             is_exact = valid_ext * (dest == v_rand) * v_rand_empty
             is_exact *= (1 - found_exact)
             exact_u.write(if_else(is_exact, current_u, exact_u))
             found_exact.write(if_else(is_exact, basic_type(1), found_exact))
 
+            # Fallback: valid extension, no exact or fallback found yet
             is_fb = valid_ext * (1 - found_exact) * (1 - found_fallback)
             fallback_u.write(if_else(is_fb, current_u, fallback_u))
             fallback_v.write(if_else(is_fb, dest, fallback_v))
             found_fallback.write(if_else(is_fb, basic_type(1), found_fallback))
 
+            # Advance source vertex when last_edge bit is set
             current_u.write(current_u + basic_type(le))
 
+        # 4. Choose extension: prefer exact match over fallback
         new_parent = if_else(found_exact, exact_u, fallback_u)
         new_child = if_else(found_exact, v_rand, fallback_v)
         found_any = found_exact.bit_or(found_fallback)
         should_add = found_any * (1 - goal_reached)
 
+        # 5. Conditionally add new_child to tree with new_parent
         parent.access(new_child, new_parent, should_add)
 
+        # 6. Check if goal was just reached
         child_is_goal = (new_child == goal)
         goal_reached.write(goal_reached.bit_or(child_is_goal * should_add))
 
@@ -133,43 +173,50 @@ class MPSPDZTestGraphKind(enum.Enum):
         match graph_type:
             case MPSPDZTestGraphKind.CYCLE:
                 G = nx.cycle_graph(7, create_using=nx.DiGraph)
-                edges, e_index = convert_edges_to_oram(*convert_graph(G))
-                source = sint(0)
-                goal = sint(4)
-                return source, goal, edges, e_index
             case MPSPDZTestGraphKind.BALANCED_TREE:
                 G = nx.balanced_tree(1, 2, create_using=nx.DiGraph)
-                edges, e_index = convert_edges_to_oram(*convert_graph(G))
-                source = sint(0)
-                goal = sint(2)
-                return source, goal, edges, e_index
             case MPSPDZTestGraphKind.COMPLETE:
                 G = nx.complete_graph(7, create_using=nx.DiGraph)
-                edges, e_index = convert_edges_to_oram(*convert_graph(G))
-                source = sint(0)
-                goal = sint(6)
-                return source, goal, edges, e_index
+                # for edge in G.edges(data=True):
+                #     print_ln("Edge %s", str(edge))
             case MPSPDZTestGraphKind.KARATE:
                 G = nx.karate_club_graph()
-                edges, e_index = convert_edges_to_oram(*convert_graph(G))
-                source = sint(0)
-                goal = sint(33)
-                return source, goal, edges, e_index
-            case MPSPDZTestGraphKind.SIMPLE | _:
-                edges = OptimalORAM(4, entry_size=(2, 5, 1))
+            case MPSPDZTestGraphKind.SIMPLE | _:                
+                # structure for edges
+                # contains tuples of form (neighbor, cost, last neighbor bit)
+                edges = OptimalORAM(4, # number of edges
+                                    entry_size=(2, # enough bits for vertices
+                                                5, # enough bits for costs
+                                                1) # always one
+                )
+
+                # first edge from vertex 0
                 edges[0] = (1, 5, 0)
+                # second and last edge from vertex 0
                 edges[1] = (2, 20, 1)
+                # edge from vertex 1
                 edges[2] = (2, 10, 1)
+                # dummy edge from vertex 2 to itself
                 edges[3] = (2, 0, 1)
 
-                e_index = OptimalORAM(3, entry_size=2)
+                # structure assigning edge list indices to vertices
+                e_index = OptimalORAM(3, # number vertices
+                                    entry_size=2) # enough bits for edge indices
+
+                # edges from 0 start at 0
                 e_index[0] = 0
+                # edges from 1 start at 2
                 e_index[1] = 2
+                # edges from 2 start at 3
                 e_index[2] = 3
 
                 source = sint(0)
-                goal = sint(2)
-                return source, goal, edges, e_index
+                return source, edges, e_index
+
+        edges, e_index = convert_edges_to_oram(*convert_graph(G))
+        source = sint(0)
+        return source, edges, e_index
+
 
 # TODO: Adapt runner when moving this alg to its own library file.
 # def run_rrt(graph_size: GraphSize):

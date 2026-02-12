@@ -204,16 +204,16 @@ class MPSPDZTestGraphKind(enum.Enum):
     ):
         match graph_type:
             case MPSPDZTestGraphKind.CYCLE:
-                G = nx.cycle_graph(7, create_using=nx.DiGraph)
-                goal = int_type(6)
+                G = nx.cycle_graph(32, create_using=nx.DiGraph)
+                goal = int_type(16)
             case MPSPDZTestGraphKind.BALANCED_TREE:
                 G = nx.balanced_tree(1, 2, create_using=nx.DiGraph)
                 goal = int_type(3)
             case MPSPDZTestGraphKind.COMPLETE:
-                G = nx.complete_graph(7, create_using=nx.DiGraph)
+                G = nx.complete_graph(6, create_using=nx.DiGraph)
                 # for edge in G.edges(data=True):
                 #     print_ln("Edge %s", str(edge))
-                goal = int_type(6)
+                goal = int_type(3)
             case MPSPDZTestGraphKind.KARATE:
                 G = nx.karate_club_graph()
                 goal = int_type(33)
@@ -279,4 +279,4 @@ def main(graph_type: MPSPDZTestGraphKind):
 
 
 # graph_type = MPSPDZTestGraphKind(sys.argv[1]) if len(sys.argv) > 1 else MPSPDZTestGraphKind.SIMPLE
-main(MPSPDZTestGraphKind("cycle"))
+main(MPSPDZTestGraphKind("complete"))

@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 
-def viz(data_path):
+def viz(data_path, title: str = "RRT Performance"):
     df = pd.read_csv(data_path)
     df["upload_time"] = df["upload_end"] - df["upload_start"]
     df["compute_time"] = df["compute_end"] - df["compute_start"]
@@ -12,8 +12,8 @@ def viz(data_path):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
 
     for structure, group in df.groupby("graph_structure"):
-        group = group.sort_values("id").reset_index(drop=True)
-        xs = range(len(group))
+        group = group.sort_values("global_comms_all_mb").reset_index(drop=True)
+        xs = group["global_comms_all_mb"]
         ax1.plot(xs, group["upload_time"], marker="o", label=structure)
         ax2.plot(xs, group["compute_time"], marker="o", label=structure)
         for i, name in enumerate(group["name"]):
@@ -22,16 +22,16 @@ def viz(data_path):
 
     for ax, title in [(ax1, "Upload Time"), (ax2, "Compute Time")]:
         ax.set_title(title)
-        ax.set_xlabel("Complexity")
+        ax.set_xlabel("Global Communication (MB)")
         ax.set_ylabel("Time (s)")
-        ax.set_xticks([0, 1, 2])
         ax.legend()
 
     fig.tight_layout()
-    plt.savefig("stress_test_times.png", dpi=150)
+    fig.suptitle(title)
+    plt.savefig("rrt_stress_test_times.png", dpi=150)
     plt.show()
 
 
 if __name__ == "__main__":
-    DATA_PATH = Path("data/dijkstras_stress_test.csv")
+    DATA_PATH = Path("data/rrt_stress_test.csv")
     viz(DATA_PATH)

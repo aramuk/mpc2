@@ -1,0 +1,8 @@
+name,graph_structure,algorithm,global_comms_all_mb,upload_start,upload_end,compute_start,compute_end
+cycle5g2,cycle,rrt,546.355,0.0,0.593733,0.710792,5.58766
+cycle7g3,cycle,rrt,1039.49,0.0,0.958733,1.06995,12.1683
+cycle15g8,cycle,rrt,5326.96,0.0,2.90896,3.06973,74.4758
+cycle32g16,cycle,rrt,32386.7,0.0,8.94108,9.18124,430.495
+complete4g2,complete,rrt,2733.2,0.0,1.48988,1.64388,42.371
+complete6g3,complete,rrt,10320.6,0.0,4.92889,5.03835,267.866
+complete8g4,complete,rrt,45220.9,0.0,13.0377,13.1565,1201.42

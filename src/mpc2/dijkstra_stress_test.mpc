@@ -51,26 +51,14 @@ class MPSPDZTestGraphKind(enum.Enum):
         match graph_type:
             case MPSPDZTestGraphKind.CYCLE:
                 G = nx.cycle_graph(7, create_using=nx.DiGraph)
-                edges, e_index = convert_edges_to_oram(*convert_graph(G))
-                source = sint(0)
-                return source, edges, e_index
             case MPSPDZTestGraphKind.BALANCED_TREE:
                 G = nx.balanced_tree(1, 2, create_using=nx.DiGraph)
-                edges, e_index = convert_edges_to_oram(*convert_graph(G))
-                source = sint(0)
-                return source, edges, e_index
             case MPSPDZTestGraphKind.COMPLETE:
                 G = nx.complete_graph(7, create_using=nx.DiGraph)
                 # for edge in G.edges(data=True):
                 #     print_ln("Edge %s", str(edge))
-                edges, e_index = convert_edges_to_oram(*convert_graph(G))
-                source = sint(0)
-                return source, edges, e_index
             case MPSPDZTestGraphKind.KARATE:
                 G = nx.karate_club_graph()
-                edges, e_index = convert_edges_to_oram(*convert_graph(G))
-                source = sint(0)
-                return source, edges, e_index
             case MPSPDZTestGraphKind.SIMPLE | _:                
                 # structure for edges
                 # contains tuples of form (neighbor, cost, last neighbor bit)
@@ -102,6 +90,10 @@ class MPSPDZTestGraphKind(enum.Enum):
 
                 source = sint(0)
                 return source, edges, e_index
+
+        edges, e_index = convert_edges_to_oram(*convert_graph(G))
+        source = sint(0)
+        return source, edges, e_index
 
 def main(graph_type: MPSPDZTestGraphKind):
     print_ln('Generating graph of kind `%s`', str(graph_type))
